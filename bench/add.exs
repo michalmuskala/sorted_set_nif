@@ -25,7 +25,7 @@ add_scenario = fn inputs, size ->
   end)
 end
 
-make_input = fn {size, cell_size, position} ->
+make_sorted_set_input = fn {size, cell_size, position} ->
   set =
     1..size
     |> Enum.map(&(&1 * 10_000))
@@ -46,15 +46,74 @@ make_input = fn {size, cell_size, position} ->
   {set, item, size}
 end
 
+make_ets_input = fn {size, _cell_size, position} ->
+  set = :ets.new(:set, [:private, :ordered_set])
+  :ets.insert(set, Enum.map(1..size, &{&1 * 10_000}))
+
+  item =
+    case position do
+      :beginning ->
+        15000
+
+      :middle ->
+        size * 5000 + 5000
+
+      :ending ->
+        size * 10000 + 5000
+    end
+
+  {set, item, size}
+end
+
+verify_sorted_set = fn {set, size} ->
+  expected = size + 1000
+  actual = Discord.SortedSet.size(set)
+
+  if expected != actual do
+    raise "Set size incorrect: expected #{expected} but found #{actual}"
+  end
+end
+
+verify_ets = fn {set, size} ->
+  expected = size + 1000
+  actual = :ets.info(set, :size)
+
+  if expected != actual do
+    raise "Set size incorrect: expected #{expected} but found #{actual}"
+  end
+end
+
 Benchee.run(
   %{
-    "Add 1000 New Items" => fn {set, item, size} ->
-      for i <- 1..1000 do
-        Discord.SortedSet.add(set, item + i)
-      end
+    "SortedSet" => {
+      fn {set, item, size} ->
+        for i <- 1..1000 do
+          Discord.SortedSet.add(set, item + i)
+        end
 
-      {set, size}
-    end
+        {set, size}
+      end,
+      before_each: make_sorted_set_input, after_each: verify_sorted_set
+    },
+    "ETS" => {
+      fn {set, item, size} ->
+        for i <- 1..1000 do
+          :ets.insert(set, {item + i})
+        end
+
+        {set, size}
+      end,
+      before_each: make_ets_input, after_each: verify_ets
+    },
+    "ETS batch" => {
+      fn {set, item, size} ->
+        data = for i <- 1..1000, do: {item + i}
+        :ets.insert(set, data)
+
+        {set, size}
+      end,
+      before_each: make_ets_input, after_each: verify_ets
+    }
   },
   inputs:
     %{}
@@ -64,15 +123,6 @@ Benchee.run(
     |> add_scenario.(500_000)
     |> add_scenario.(750_000)
     |> add_scenario.(1_000_000),
-  before_each: make_input,
-  after_each: fn {set, size} ->
-    expected = size + 1000
-    actual = Discord.SortedSet.size(set)
-
-    if expected != actual do
-      raise "Set size incorrect: expected #{expected} but found #{actual}"
-    end
-  end,
   formatters: [
     &Benchee.Formatters.Console.output/1,
     &Benchee.Formatters.HTML.output/1
@@ -82,6 +132,6 @@ Benchee.run(
   ],
   save: %{
     path: "bench/results/add/runs"
-  },
-  time: 60
+  }
+  # time: 60
 )
